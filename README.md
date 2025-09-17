@@ -62,6 +62,8 @@ ros2 launch perahive_mavros simulator.launch.py uavs:="1" base_port:=14550 bind_
 # Start the swarm control
 ros2 launch skysight_360 skysight.launch.py
 
+
+
 ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 --ros-args -r image:=/camera/image_raw -r camera:=/camera
 
 
@@ -117,14 +119,4 @@ pip install ultralytics
 
 
 ```
-python3 -m venv venv
-source venv/bin/activate
-
-pip install --upgrade pip
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install ultralytics[export]
-
-source ~/Projects/perahive/ws/venv/bin/activate
-colcon build
-source install/setup.bash
-ros2 launch skysight_360 skysight.launch.py
+python3 -m pip install ultralytics

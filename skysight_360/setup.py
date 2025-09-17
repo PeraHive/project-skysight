@@ -2,11 +2,10 @@ from setuptools import find_packages, setup
 import os
 from glob import glob
 
-
 package_name = 'skysight_360'
 
 setup(
-    name=package_name,
+    name=package_name,  # ✅ must match everywhere, no dashes
     version='0.0.0',
     packages=find_packages(exclude=['test']),
     data_files=[
@@ -17,23 +16,16 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'models'), glob('models/*.pt')),
     ],
-    install_requires = [
-    'setuptools',
-    'ultralytics',
-    'torch',
-    'torchvision',
-    'opencv-python',
-    'numpy',
-    ],
+    install_requires=['setuptools'],
     zip_safe=True,
     maintainer='jazz',
     maintainer_email='34100523+janithcyapa@users.noreply.github.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='YOLO-based vision module for Skysight 360',
+    license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            #   'yolo_node = skysight_360.yolo_node:main',
+            'yolo_node = skysight_360.yolo_node:main',
         ],
     },
 )

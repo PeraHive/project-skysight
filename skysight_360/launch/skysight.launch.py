@@ -62,7 +62,7 @@ def generate_launch_description():
             package='skysight_360',
             executable='yolo_node',
             name='yolo_node',
-            parameters=[{'model_path': '/absolute/path/to/your_model.pt'}]
+            # parameters=[{'model_path': '/absolute/path/to/your_model.pt'}]
         )
 
     ])
