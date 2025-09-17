@@ -60,7 +60,10 @@ ros2 launch perahive_mavros mavros.launch.py uavs:="1"
 ros2 launch perahive_mavros simulator.launch.py uavs:="1" base_port:=14550 bind_ip:=127.0.0.1
 
 # Start the swarm control
-ros2 launch shadow shadow.launch.py
+ros2 launch skysight_360 skysight.launch.py
+
+ros2 run camera_calibration cameracalibrator --size 8x6 --square 0.025 --ros-args -r image:=/camera/image_raw -r camera:=/camera
+
 
 # (Optional) View data in Foxglove
 ros2 launch foxglove_bridge foxglove_bridge_launch.xml
@@ -79,3 +82,49 @@ python3 ~/Projects/ardupilot_ws/Tools/autotest/sim_vehicle.py \
   --out=udp:127.0.0.1:14550 \
   --out=udp:127.0.0.1:14551
 ```
+
+
+## Setup Camera
+For manual checks
+```
+sudo apt install v4l-utils
+
+v4l2-ctl --list-devices
+v4l2-ctl --device=/dev/video0 --list-formats-ext
+
+
+sudo apt install mpv
+mpv /dev/video4
+```
+
+install ros package
+```
+sudo apt install ros-jazzy-v4l2-camera
+sudo apt install ros-jazzy-image-pipeline
+```
+
+validating installation
+```
+ros2 pkg executables image_proc
+sudo apt install ros-jazzy-gscam
+```
+
+Intsall YOLO
+```
+python3 -m venv venv
+source venv/bin/activate
+pip install ultralytics
+
+
+```
+python3 -m venv venv
+source venv/bin/activate
+
+pip install --upgrade pip
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install ultralytics[export]
+
+source ~/Projects/perahive/ws/venv/bin/activate
+colcon build
+source install/setup.bash
+ros2 launch skysight_360 skysight.launch.py
