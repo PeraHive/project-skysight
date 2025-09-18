@@ -69,7 +69,7 @@ def generate_launch_description():
                 'width': 640,
                 'height': 360,
                 'rate': 3.0,
-                'jpeg_quality': 30
+                'jpeg_quality': 70
             }]
         ),
 

@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage, Image
-from std_msgs.msg import Int32MultiArray
+from geometry_msgs.msg import Point
 from ultralytics import YOLO
 from ament_index_python.packages import get_package_share_directory
 import cv2
@@ -31,8 +31,7 @@ class YoloDirectionNode(Node):
             self.image_callback,
             10)
         self.image_pub = self.create_publisher(Image, '/camera/image_yolo', 10)
-        self.offset_pub = self.create_publisher(Int32MultiArray, '/person_offset', 10)
-
+        self.offset_pub = self.create_publisher(Point, '/person_offset', 10)
         # Shared frame buffer
         self.frame_lock = threading.Lock()
         self.latest_frame = None
@@ -122,8 +121,10 @@ class YoloDirectionNode(Node):
                 self.get_logger().warn(f"Failed to publish image: {e}")
 
             # Publish offsets
-            offset_msg = Int32MultiArray()
-            offset_msg.data = [dx, dy]
+            offset_msg = Point()
+            offset_msg.x = float(dx)
+            offset_msg.y = float(dy)
+            offset_msg.z = 0.0
             self.offset_pub.publish(offset_msg)
 
             time.sleep(0.01)  # ~100 Hz max loop
