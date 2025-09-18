@@ -1,94 +1,150 @@
+#!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Int32MultiArray
-from cv_bridge import CvBridge
 from ultralytics import YOLO
-import cv2
 from ament_index_python.packages import get_package_share_directory
+import cv2
 import os
+import threading
+import time
+import numpy as np
+from cv_bridge import CvBridge   # still needed for publishing Image
 
 class YoloDirectionNode(Node):
     def __init__(self):
         super().__init__('yolo_direction_node')
-        # Load YOLO model (replace with your custom .pt if needed)
+
+        # Load YOLO model
         package_share_dir = get_package_share_directory('skysight_360')
         model_path = os.path.join(package_share_dir, 'models', 'yolov8n.pt')
         self.model = YOLO(model_path)
 
-        # ROS <-> OpenCV bridge
+        # CvBridge only for publishing raw Image
         self.bridge = CvBridge()
 
-        # Subscriber to raw camera images
+        # Subscribers / Publishers
         self.sub = self.create_subscription(
-            Image,
-            '/camera/image_raw',
+            CompressedImage,
+            '/camera/image_optimized',   # now expects CompressedImage
             self.image_callback,
             10)
+        self.image_pub = self.create_publisher(Image, '/camera/image_yolo', 10)
+        self.offset_pub = self.create_publisher(Int32MultiArray, '/person_offset', 10)
 
-        # Publisher for processed images
-        self.image_pub = self.create_publisher(
-            Image,
-            '/camera/image_yolo',
-            10)
+        # Shared frame buffer
+        self.frame_lock = threading.Lock()
+        self.latest_frame = None
 
-        # Publisher for dx, dy values
-        self.offset_pub = self.create_publisher(
-            Int32MultiArray,
-            '/person_offset',
-            10)
+        # Optimization params
+        self.frame_skip = 3         # process 1 in every 3 frames
+        self.resize_width = 640     # resize before YOLO
+        self.conf_thresh = 0.5      # confidence threshold
+        self.running = True
 
-        self.get_logger().info("YOLO Direction Node started: listening on /camera/image_raw")
+        # Start worker thread
+        self.worker = threading.Thread(target=self.yolo_loop, daemon=True)
+        self.worker.start()
 
-    def image_callback(self, msg):
-        # Convert ROS Image -> OpenCV
-        frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        h, w, _ = frame.shape
-        frame_center = (w // 2, h // 2)
+        self.get_logger().info("YOLO Direction Node started (CompressedImage input)")
 
-        dx, dy = 0, 0  # default (no detection)
+    def image_callback(self, msg: CompressedImage):
+        """Decode compressed image and store latest frame."""
+        try:
+            np_arr = np.frombuffer(msg.data, np.uint8)
+            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if frame is not None:
+                with self.frame_lock:
+                    self.latest_frame = frame
+            else:
+                self.get_logger().warn("cv2.imdecode returned None")
+        except Exception as e:
+            self.get_logger().error(f"CompressedImage decode failed: {e}")
 
-        # Run YOLO inference
-        results = self.model(frame, stream=True)
+    def yolo_loop(self):
+        """Background thread: run YOLO inference at steady rate."""
+        frame_count = 0
+        while rclpy.ok() and self.running:
+            frame = None
+            with self.frame_lock:
+                if self.latest_frame is not None:
+                    frame = self.latest_frame.copy()
 
-        for r in results:
-            for box in r.boxes:
-                cls = int(box.cls[0])
-                conf = float(box.conf[0])
+            if frame is None:
+                time.sleep(0.01)
+                continue
 
-                if cls == 0 and conf > 0.5:  # person only
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    cx = (x1 + x2) // 2
-                    cy = (y1 + y2) // 2
-                    dx = cx - frame_center[0]
-                    dy = cy - frame_center[1]
+            frame_count += 1
+            if frame_count % self.frame_skip != 0:
+                continue  # skip frames for speed
 
-                    # Draw annotations
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
-                    cv2.circle(frame, frame_center, 5, (255, 0, 0), -1)
-                    cv2.arrowedLine(frame, (cx, cy), frame_center, (0, 255, 255), 2)
-                    cv2.putText(frame, f"dx={dx}, dy={dy}",
-                                (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.6, (255, 255, 0), 2)
+            h, w, _ = frame.shape
+            frame_center = (w // 2, h // 2)
+            dx, dy = 0, 0
 
-        # Publish annotated image
-        img_msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
-        self.image_pub.publish(img_msg)
+            # Resize before inference
+            scale = self.resize_width / w
+            resized = cv2.resize(frame, (self.resize_width, int(h * scale)))
 
-        # Publish dx, dy values
-        offset_msg = Int32MultiArray()
-        offset_msg.data = [dx, dy]
-        self.offset_pub.publish(offset_msg)
+            # Run YOLO
+            try:
+                results = self.model(resized, stream=True, verbose=False)
+            except Exception as e:
+                self.get_logger().error(f"YOLO inference failed: {e}")
+                continue
+
+            for r in results:
+                for box in r.boxes:
+                    cls = int(box.cls[0])
+                    conf = float(box.conf[0])
+                    if cls == 0 and conf > self.conf_thresh:  # person
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        cx = int((x1 + x2) / 2 / scale)
+                        cy = int((y1 + y2) / 2 / scale)
+                        dx = cx - frame_center[0]
+                        dy = cy - frame_center[1]
+
+                        # Draw (optional)
+                        cv2.rectangle(frame, (int(x1/scale), int(y1/scale)),
+                                      (int(x2/scale), int(y2/scale)), (0, 255, 0), 2)
+                        cv2.circle(frame, (cx, cy), 5, (0, 0, 255), -1)
+                        cv2.arrowedLine(frame, (cx, cy), frame_center, (0, 255, 255), 2)
+                        cv2.putText(frame, f"dx={dx}, dy={dy}",
+                                    (cx, cy - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.6, (255, 255, 0), 2)
+
+            # Publish annotated image (raw Image for RViz/Foxglove)
+            try:
+                img_msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+                self.image_pub.publish(img_msg)
+            except Exception as e:
+                self.get_logger().warn(f"Failed to publish image: {e}")
+
+            # Publish offsets
+            offset_msg = Int32MultiArray()
+            offset_msg.data = [dx, dy]
+            self.offset_pub.publish(offset_msg)
+
+            time.sleep(0.01)  # ~100 Hz max loop
+
+    def destroy_node(self):
+        self.running = False
+        if self.worker.is_alive():
+            self.worker.join()
+        super().destroy_node()
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = YoloDirectionNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

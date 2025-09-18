@@ -28,41 +28,55 @@ def generate_launch_description():
             ],
         ),
 
-        # Image transport compressor
-        Node(
-            package='image_transport',
-            executable='republish',
-            name='image_transport_republisher',
-            arguments=['raw', 'compressed'],
-            remappings=[
-                ('in', '/camera/image_raw'),
-                ('out', '/camera/image_raw/compressed'),
-            ],
-            parameters=[{
-                'jpeg_quality': 30,     # default 95, Lower = smaller file size, higher = better quality.
-                'png_level': 1,         # default 3, Higher = more compression, slower.
-            }]
+        # Node(
+        #     package='image_transport',
+        #     executable='republish',
+        #     name='image_transport_republisher',
+        #     arguments=['raw', 'compressed'],
+        #     remappings=[
+        #         ('in', '/camera/image_raw'),
+        #         ('out', '/camera/image_compressed'),
+        #     ],
+        #     parameters=[{
+        #         'jpeg_quality': 30,     # default 95, Lower = smaller file size, higher = better quality.
+        #         'png_level': 1,         # default 3, Higher = more compression, slower.
+        #     }]
 
-        ),
+        # ),
 
-        # Image_proc for rectification / color processing
         # Node(
         #     package='image_proc',
-        #     executable='rectify_node',
-        #     name='rectify',
+        #     executable='crop_decimate_node',
+        #     name='decimate_for_yolo',
         #     namespace='camera',
         #     remappings=[
-        #         ('image', '/camera/image_raw'),
-        #         ('camera_info', '/camera/camera_info'),
-        #         ('image_rect', '/camera/image_rect')
+        #         ('in/image_raw', '/camera/image_compressed'),
+        #         ('in/camera_info', '/camera/camera_info'),
+        #         ('out/image_raw', '/camera/image_resized'),
+        #         ('out/camera_info', '/camera/camera_info_resized'),
         #     ],
+        #     parameters=[{
+        #         'decimation_x': 4,
+        #         'decimation_y': 4
+        #     }]
         # ),
+
+        Node(
+            package='skysight_360',
+            executable='preprocess_node',
+            name='preprocess_node',
+            parameters=[{
+                'width': 640,
+                'height': 360,
+                'rate': 3.0,
+                'jpeg_quality': 30
+            }]
+        ),
 
         Node(
             package='skysight_360',
             executable='yolo_node',
             name='yolo_node',
-            # parameters=[{'model_path': '/absolute/path/to/your_model.pt'}]
-        )
+        ),
 
     ])

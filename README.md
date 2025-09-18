@@ -59,7 +59,7 @@ ros2 launch perahive_mavros mavros.launch.py uavs:="1"
 # Run simulator with 2 UAVs
 ros2 launch perahive_mavros simulator.launch.py uavs:="1" base_port:=14550 bind_ip:=127.0.0.1
 
-# Start the swarm control
+# Start the swarm controlimport rclpy
 ros2 launch skysight_360 skysight.launch.py
 
 
@@ -109,14 +109,9 @@ validating installation
 ```
 ros2 pkg executables image_proc
 sudo apt install ros-jazzy-gscam
+sudo apt install ros-jazzy-image-transport
 ```
 
 Intsall YOLO
-```
-python3 -m venv venv
-source venv/bin/activate
-pip install ultralytics
-
-
 ```
 python3 -m pip install ultralytics

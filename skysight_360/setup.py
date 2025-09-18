@@ -26,6 +26,8 @@ setup(
     entry_points={
         'console_scripts': [
             'yolo_node = skysight_360.yolo_node:main',
+            'preprocess_node = skysight_360.preprocess_node:main',
+
         ],
     },
 )
