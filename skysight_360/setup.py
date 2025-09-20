@@ -14,9 +14,9 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
-        (os.path.join('share', package_name, 'models'), glob('models/*.pt')),
+        (os.path.join('share', package_name, 'models'), glob('models/*')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'simple-pid'],
     zip_safe=True,
     maintainer='jazz',
     maintainer_email='34100523+janithcyapa@users.noreply.github.com',
@@ -27,6 +27,8 @@ setup(
         'console_scripts': [
             'yolo_node = skysight_360.yolo_node:main',
             'preprocess_node = skysight_360.preprocess_node:main',
+            'mobilenet_node = skysight_360.mobilenet_node:main',
+            'track_node = skysight_360.track_node:main',
 
         ],
     },
