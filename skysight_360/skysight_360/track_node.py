@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import time
 import math
 from typing import Tuple
 
@@ -47,13 +48,12 @@ class YawFollowSimplePIDNS(Node):
         # Vehicle / mission
         self.uav_ns      = self.declare_parameter('uav_ns', '/uav1').get_parameter_value().string_value
         self.guided_mode = self.declare_parameter('guided_mode', 'GUIDED').get_parameter_value().string_value  # 'OFFBOARD' for PX4
-        self.target_alt  = float(self.declare_parameter('target_alt', 2.0).get_parameter_value().double_value)
+        self.target_alt  = float(self.declare_parameter('target_alt', 3.0).get_parameter_value().double_value)
         self.alt_thresh  = float(self.declare_parameter('alt_air_thresh', 0.5).get_parameter_value().double_value)
-        self.sp_rate_hz  = float(self.declare_parameter('sp_rate_hz', 20.0).get_parameter_value().double_value)
+        self.sp_rate_hz  = float(self.declare_parameter('sp_rate_hz', 5.0).get_parameter_value().double_value)
 
         # Offset source
         self.offset_topic = self.declare_parameter('offset_topic', '/detected/offset').get_parameter_value().string_value
-        self.use_ns_for_offset = bool(self.declare_parameter('use_ns_for_offset', False).get_parameter_value().bool_value)
 
         # Error normalization (optional)
         self.normalize_error = bool(self.declare_parameter('normalize_error', False).get_parameter_value().bool_value)
@@ -78,15 +78,13 @@ class YawFollowSimplePIDNS(Node):
         self.rel_alt = 0.0
         self.pose = PoseStamped()
         self.offset = Point()
-        self.airborne = False
+        self.offset_received = False  # set True when first offset arrives
 
         # ---------- I/O ----------
-        offset_full = f"{self.uav_ns}{self.offset_topic}" if self.use_ns_for_offset else self.offset_topic
-
         self.create_subscription(State,       f'{self.uav_ns}/state',                    self._state_cb, qos)
         self.create_subscription(Float64,     f'{self.uav_ns}/global_position/rel_alt',  self._alt_cb,   qos)
         self.create_subscription(PoseStamped, f'{self.uav_ns}/local_position/pose',      self._pose_cb,  qos)
-        self.create_subscription(Point,       offset_full,                                self._offset_cb, 10)
+        self.create_subscription(Point,       self.offset_topic,                         self._offset_cb, 10)
 
         self.sp_pub = self.create_publisher(PositionTarget, f'{self.uav_ns}/setpoint_raw/local', 10)
 
@@ -97,14 +95,11 @@ class YawFollowSimplePIDNS(Node):
         # Reset integrator service
         self.reset_srv = self.create_service(Empty, 'reset_pid_integrator', self._handle_reset_pid)
 
-        self.get_logger().info(f"MAVROS NS: {self.uav_ns} | Offset topic: {offset_full}")
+        self.get_logger().info(f"MAVROS NS: {self.uav_ns} | Offset topic: {self.offset_topic}")
         self.get_logger().info('Waiting for MAVROS services...')
         for cli in (self.arm_cli, self.tko_cli, self.setmode_cli):
             cli.wait_for_service()
         self.get_logger().info('MAVROS services are available.')
-
-        # Main loop timer
-        self.timer = self.create_timer(1.0 / max(1e-3, self.sp_rate_hz), self._step)
 
     # ---------- Param live update ----------
     def _on_params(self, params):
@@ -131,104 +126,99 @@ class YawFollowSimplePIDNS(Node):
     def _state_cb(self, msg: State): self.state = msg
     def _alt_cb(self, msg: Float64): self.rel_alt = float(msg.data)
     def _pose_cb(self, msg: PoseStamped): self.pose = msg
-    def _offset_cb(self, msg: Point): self.offset = msg
+    def _offset_cb(self, msg: Point):
+        self.offset = msg
+        self.offset_received = True
 
-    # ---------- MAVROS helpers (reference flow preserved) ----------
-    def _set_mode(self, mode: str, timeout: float = 10.0) -> bool:
+    # ---------- MAVROS helpers ----------
+    def _set_mode(self, mode: str) -> bool:
         req = SetMode.Request(); req.base_mode = 0; req.custom_mode = mode
         fut = self.setmode_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, fut, timeout_sec=timeout)
-        ok = bool(fut.done() and fut.result() and getattr(fut.result(), 'mode_sent', False))
-        self.get_logger().info(f"SetMode('{mode}') -> {ok}")
-        return ok
+        rclpy.spin_until_future_complete(self, fut)
+        return bool(fut.done() and fut.result() and getattr(fut.result(), 'mode_sent', False))
 
-    def _arm_once(self, timeout: float = 10.0) -> bool:
+    def _arm(self) -> bool:
         req = CommandBool.Request(); req.value = True
         fut = self.arm_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, fut, timeout_sec=timeout)
-        ok = bool(fut.done() and fut.result() and getattr(fut.result(), 'success', False))
-        self.get_logger().info(f"Arm() -> {ok}")
-        return ok
+        rclpy.spin_until_future_complete(self, fut)
+        return bool(fut.done() and fut.result() and getattr(fut.result(), 'success', False))
 
-    def _takeoff(self, alt: float, timeout: float = 10.0) -> bool:
+    def _takeoff(self, alt: float) -> bool:
         req = CommandTOL.Request()
-        req.altitude = float(alt); req.latitude = 0.0; req.longitude = 0.0
-        req.min_pitch = 0.0; req.yaw = float('nan')
+        req.altitude = float(alt); req.latitude=0.0; req.longitude=0.0; req.min_pitch=0.0; req.yaw=float('nan')
         fut = self.tko_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, fut, timeout_sec=timeout)
-        ok = bool(fut.done() and fut.result() and getattr(fut.result(), 'success', False))
-        self.get_logger().info(f"Takeoff({alt}) -> {ok}")
-        return ok
+        rclpy.spin_until_future_complete(self, fut)
+        return bool(fut.done() and fut.result() and getattr(fut.result(), 'success', False))
 
-    # ---------- Setpoint publishers ----------
+    # ---------- Setpoint publisher ----------
     def _publish_xyz_yawrate(self, x: float, y: float, z: float, yaw_rate: float):
-        """
-        Hold position (x,y,z) and command yaw *rate* (rad/s) via PositionTarget.
-        """
         sp = PositionTarget()
         sp.header.stamp = self.get_clock().now().to_msg()
         sp.coordinate_frame = PositionTarget.FRAME_LOCAL_NED
         sp.type_mask = (
             PositionTarget.IGNORE_VX | PositionTarget.IGNORE_VY | PositionTarget.IGNORE_VZ |
             PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ |
-            PositionTarget.IGNORE_YAW      # we ignore absolute yaw, we DO send yaw_rate
-            # NOTE: DO NOT set IGNORE_YAW_RATE if you want yaw_rate to take effect
+            PositionTarget.IGNORE_YAW     # we ignore absolute yaw, we DO send yaw_rate (so DO NOT ignore yaw_rate)
         )
         sp.position.x = float(x); sp.position.y = float(y); sp.position.z = float(z)
         sp.yaw_rate = float(yaw_rate)  # rad/s
         self.sp_pub.publish(sp)
 
-    # ---------- Main step ----------
-    def _step(self):
-        # Wait FCU connection
-        if not self.state.connected:
-            self.get_logger().throttle_info(2000, 'Waiting for FCU...')
+    # ---------- Main run loop ----------
+    def run(self):
+        # 1) Wait FCU connection
+        while rclpy.ok() and not self.state.connected:
+            self.get_logger().info('Waiting for FCU…')
+            rclpy.spin_once(self, timeout_sec=0.2)
+
+        # 2) Mode + arm + takeoff
+        self._set_mode(self.guided_mode)
+        while rclpy.ok() and not self.state.armed:
+            if not self._arm():
+                self.get_logger().warn('Arming failed, retrying…')
+            rclpy.spin_once(self, timeout_sec=0.2)
+
+        if not self._takeoff(self.target_alt):
+            self.get_logger().error('Takeoff failed.')
             return
 
-        # Takeoff sequence (once)
-        if not self.airborne:
-            self._set_mode(self.guided_mode)
-            while rclpy.ok() and not self.state.armed:
-                self._arm_once()
-                rclpy.spin_once(self, timeout_sec=0.2)
+        while rclpy.ok() and self.rel_alt < (self.target_alt - self.alt_thresh):
+            rclpy.spin_once(self, timeout_sec=0.2)
+        self.get_logger().info(f'UAV airborne at {self.rel_alt:.1f} m')
 
-            if not self._takeoff(self.target_alt):
-                self.get_logger().error('Takeoff failed; retrying...')
-                return
+        # 3) Wait for offset messages
+        self.get_logger().info('Waiting for offset messages…')
+        while rclpy.ok() and not self.offset_received:
+            rclpy.spin_once(self, timeout_sec=0.2)
+        self.get_logger().info('Offset messages received.')
 
-            # Wait until airborne
-            while rclpy.ok() and self.rel_alt < (self.target_alt - self.alt_thresh):
-                rclpy.spin_once(self, timeout_sec=0.2)
-                # stream neutral holds to satisfy OFFBOARD/position controllers
-                x, y, _, yaw = pose_xyz_yaw(self.pose)
-                self._publish_xyz_yawrate(x, y, self.target_alt, 0.0)
+        # 4) Control loop
+        dt = 1.0 / max(1e-3, self.sp_rate_hz)  # proper loop period
+        self.get_logger().info('Tracking target yaw…')
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.0)
 
-            self.airborne = True
-            self.get_logger().info(f'Airborne ~{self.rel_alt:.1f} m; switching to yaw-follow.')
-            return  # next tick begins control
+            # Current pose
+            x, y, _, _ = pose_xyz_yaw(self.pose)
 
-        # --- Yaw PID control ---
-        x, y, _, yaw = pose_xyz_yaw(self.pose)
+            # Pixel error → optionally normalize to [-1..1]
+            err = float(self.offset.x)
+            if self.normalize_error and self.image_width_px > 1.0:
+                half_w = self.image_width_px / 2.0
+                err = max(-half_w, min(half_w, err)) / half_w
 
-        # Pixel error → optionally normalized to [-1..1] by half width
-        err = float(self.offset.x)
-        if self.normalize_error and self.image_width_px > 1.0:
-            half_w = self.image_width_px / 2.0
-            err = max(-half_w, min(half_w, err)) / half_w  # clamp then normalize
+            # PID → yaw rate (rad/s). Using -err means “turn toward the target”.
+            yaw_rate_cmd = float(self.pid(-err))
 
-        # PID computes yaw_rate (rad/s). Negative sign rotates toward target if +x means "target to the right".
-        yaw_rate_cmd = self.pid(-err)  # setpoint=0, so control on -err is conventional "turn toward error"
-
-        self._publish_xyz_yawrate(x, y, self.target_alt, yaw_rate_cmd)
+            self._publish_xyz_yawrate(x, y, self.target_alt, yaw_rate_cmd)
+            time.sleep(dt)
 
 
 def main():
     rclpy.init()
     node = YawFollowSimplePIDNS()
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+        node.run()
     finally:
         node.destroy_node()
         rclpy.shutdown()

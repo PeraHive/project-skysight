@@ -33,13 +33,15 @@ source install/setup.bash
 ### 1. Run MAVROS for Multiple UAVs
 This sets up MAVROS instances for each drone (with proper namespaces).  
 ```bash
-ros2 launch perahive_mavros mavros.launch.py uavs:="1,2"
+ros2 launch perahive_mavros mavros.launch.py uavs:="1"
 ```
 
 ### 2. Start the Simulator
 Run SITL for multiple UAVs, binding to a local port:  
 ```bash
-ros2 launch perahive_mavros simulator.launch.py uavs:=1,2 base_port:=14550 bind_ip:=0.0.0.0
+ros2 launch perahive_mavros simulator.launch.py uavs:=1 base_port:=14550 bind_ip:=0.0.0.0
+
+ros2 run mavros mavros_node --ros-args --remap __ns:=/uav4 -p fcu_url:="udp://0.0.0.0:14550@"
 ```
 
 ### 3. Launch Sky Sight Vision Pipeline
@@ -93,7 +95,10 @@ colcon build && source install/setup.bash
 ros2 launch perahive_mavros mavros.launch.py uavs:="1"
 
 # 3. Run simulator for UAV1
-ros2 launch perahive_mavros simulator.launch.py uavs:="1" base_port:=14550 bind_ip:=192.168.7.158
+ros2 launch perahive_mavros simulator.launch.py uavs:="1" base_port:=14550 bind_ip:=0.0.0.0
+
+ros2 run mavros mavros_node  --ros-args --remap __ns:=/uav1 -p fcu_url:="udp://0.0.0.0:14550@"
+
 # 4. Start Sky Sight (camera + YOLO)
 ros2 launch skysight_360 skysight.launch.py
 
@@ -113,8 +118,7 @@ source ~/Projects/swarm_drone/venv/bin/activate
 ### Launch UAV1 (SYSID 1)
 Send telemetry to MAVROS + GCS:
 ```bash
-python3 ~/Projects/ardupilot_ws/Tools/autotest/sim_vehicle.py   -v ArduCopter -I0 --sysid 1   --out=udp:127.0.0.1:14550 \   # Ground Control Station
-  --out=udp:127.0.0.1:14551     # MAVROS uav1
+python3 ~/Projects/ardupilot_ws/Tools/autotest/sim_vehicle.py   -v ArduCopter -I0 --sysid 1   --out=udp:192.168.7.73:14550 --out=udp:127.0.0.1:14550 
 ```
 
 For multiple UAVs, increment `-I` and ports.
