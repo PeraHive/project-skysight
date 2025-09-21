@@ -31,7 +31,7 @@ def generate_launch_description():
             name='track_node',
             output='screen',
             parameters=[
-                {'uav_ns': '/uav1'},
+                {'uav_ns': '/mavros'},
                 {'guided_mode': 'GUIDED'},      # set to 'OFFBOARD' for PX4
                 {'target_alt': 3.0},
 
