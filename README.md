@@ -101,6 +101,8 @@ ros2 run mavros mavros_node  --ros-args --remap __ns:=/uav1 -p fcu_url:="udp://0
 
 # 4. Start Sky Sight (camera + YOLO)
 ros2 launch skysight_360 skysight.launch.py
+ros2 launch skysight_360 pi.launch.py
+ros2 launch skysight_360 gs.launch.py
 
 # 5. (Optional) View data in Foxglove
 ros2 launch foxglove_bridge foxglove_bridge_launch.xml
